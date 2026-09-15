@@ -121,7 +121,7 @@ Important rules:
 """
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
 
         contents=ticket_text,
 
@@ -132,7 +132,7 @@ Important rules:
 
             response_schema=TicketAnalysis,
 
-            temperature=0.2
+        
         )
     )
 
