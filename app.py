@@ -1,23 +1,24 @@
 import os
 import streamlit as st
-from dotenv import load_dotenv
-from openai import OpenAI
+from google import genai
+from google.genai import types
 from pydantic import BaseModel
 from typing import Literal
 
-# Load environment variables
-load_dotenv()
 
-# Page configuration
+# -------------------------------------------------
+# PAGE CONFIGURATION
+# -------------------------------------------------
 st.set_page_config(
     page_title="AI Service Desk Agent",
     page_icon="🤖",
     layout="wide"
 )
 
-# -----------------------------
-# Structured AI response model
-# -----------------------------
+
+# -------------------------------------------------
+# STRUCTURED GEMINI RESPONSE
+# -------------------------------------------------
 class TicketAnalysis(BaseModel):
     summary: str
 
@@ -40,234 +41,338 @@ class TicketAnalysis(BaseModel):
     ]
 
     confidence: int
+
     priority_reason: str
+
     recommended_knowledge_article: str
+
     suggested_response: str
 
 
-# -----------------------------
-# AI analysis function
-# -----------------------------
+# -------------------------------------------------
+# GET GEMINI API KEY
+# -------------------------------------------------
+def get_api_key():
+
+    # First try environment variable
+    api_key = os.getenv("GEMINI_API_KEY")
+
+    # Fallback to Streamlit Secrets
+    if not api_key:
+        try:
+            api_key = st.secrets["GEMINI_API_KEY"]
+        except Exception:
+            api_key = None
+
+    return api_key
+
+
+# -------------------------------------------------
+# GEMINI ANALYSIS FUNCTION
+# -------------------------------------------------
 def analyse_ticket(ticket_text):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    response = client.responses.parse(
-        model="gpt-5.6-luna",
+    api_key = get_api_key()
 
-        input=[
-            {
-                "role": "system",
-                "content": """
+    client = genai.Client(
+        api_key=api_key
+    )
+
+    system_instruction = """
 You are an AI Service Desk Assistant supporting an enterprise IT service desk.
 
-Analyse the user's IT support ticket.
+Your role is to analyse incoming IT support tickets and provide recommendations
+to a human service desk analyst.
 
-Your job is to:
+For every ticket:
 
-1. Create a concise summary.
-2. Assign the most appropriate service desk category.
+1. Create a short and accurate summary.
+2. Assign the most appropriate category.
 3. Recommend a priority.
-4. Explain why that priority was selected.
-5. Provide a confidence score between 0 and 100.
+4. Explain why the priority was selected.
+5. Provide a confidence score from 0 to 100.
 6. Recommend a relevant knowledge article title.
 7. Draft a professional first-response message for the end user.
 
 Priority guidance:
 
 Critical:
-Major business outage, severe cybersecurity incident, or critical service unavailable for many users.
+A major business outage, serious cybersecurity incident, or critical service
+unavailable to many users.
 
 High:
-Significant business impact, important user unable to work, urgent customer-facing issue, or important deadline affected.
+Significant business impact, an important user cannot work, an urgent
+customer-facing issue, or an important deadline is affected.
 
 Medium:
-Normal service disruption affecting productivity but with no major immediate business impact.
+A normal service disruption affecting productivity without immediate major
+business impact.
 
 Low:
-General request, minor inconvenience, information request, or non-urgent issue.
+A general request, information request, minor inconvenience, or non-urgent issue.
 
-Never claim that an action has already been completed.
+Important rules:
 
-You are making recommendations only.
-
-The final decision must remain with a human service desk analyst.
+- Never claim an issue has already been fixed.
+- Never claim an action has already been completed.
+- Do not invent technical facts that are not present in the ticket.
+- Treat your output as a recommendation only.
+- The human service desk analyst remains responsible for the final decision.
 """
-            },
 
-            {
-                "role": "user",
-                "content": ticket_text
-            }
-        ],
+    response = client.models.generate_content(
+        model="gemini-3.8-flash",
 
-        text_format=TicketAnalysis
+        contents=ticket_text,
+
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+
+            response_mime_type="application/json",
+
+            response_schema=TicketAnalysis,
+
+            temperature=0.2
+        )
     )
 
-    return response.output_parsed
+    return TicketAnalysis.model_validate_json(
+        response.text
+    )
 
 
-# -----------------------------
-# User interface
-# -----------------------------
+# -------------------------------------------------
+# HEADER
+# -------------------------------------------------
 st.title("🤖 AI Service Desk Agent")
 
-st.subheader("Intelligent ITSM Ticket Analysis")
+st.subheader(
+    "Intelligent ITSM Ticket Analysis"
+)
 
 st.write(
     """
-    This prototype demonstrates how AI can support service desk operations
-    through ticket classification, prioritization, knowledge recommendations,
-    and response suggestions while keeping humans responsible for final decisions.
+    This prototype demonstrates how generative AI can support service desk
+    operations through ticket classification, prioritization, knowledge
+    recommendations, and response suggestions while keeping humans responsible
+    for final decisions.
     """
 )
 
 st.info(
-    "AI recommendations require human review before any action is taken."
+    "🔐 AI recommendations require human review before any action is taken."
 )
 
 st.divider()
 
 
-# -----------------------------
-# Ticket input
-# -----------------------------
+# -------------------------------------------------
+# TICKET INPUT
+# -------------------------------------------------
 ticket = st.text_area(
     "Enter Service Desk Ticket",
     placeholder=(
         "Example: I cannot connect to the company VPN and I have "
         "an important customer meeting in 20 minutes."
     ),
-    height=150
+    height=160
 )
 
 
-# -----------------------------
-# Analyse button
-# -----------------------------
-if st.button("🔍 Analyse Ticket", type="primary"):
+# -------------------------------------------------
+# ANALYSE BUTTON
+# -------------------------------------------------
+if st.button(
+    "🔍 Analyse Ticket",
+    type="primary"
+):
 
     if not ticket.strip():
 
-        st.warning("Please enter a ticket description.")
+        st.warning(
+            "Please enter a service desk ticket."
+        )
 
-    elif not os.getenv("OPENAI_API_KEY"):
+    elif not get_api_key():
 
         st.error(
-            "OPENAI_API_KEY was not found. "
-            "Please configure your API key securely."
+            "Gemini API key was not found. "
+            "Please configure GEMINI_API_KEY in Streamlit Secrets."
         )
 
     else:
 
         try:
 
-            with st.spinner("AI is analysing the ticket..."):
+            with st.spinner(
+                "Gemini is analysing the ticket..."
+            ):
 
-                analysis = analyse_ticket(ticket)
+                analysis = analyse_ticket(
+                    ticket
+                )
 
                 st.session_state["analysis"] = analysis
 
+                # Reset previous human decision
+                if "decision" in st.session_state:
+                    del st.session_state["decision"]
 
-        except Exception as e:
+        except Exception as error:
 
-            st.error("The AI analysis could not be completed.")
+            st.error(
+                "The AI analysis could not be completed."
+            )
 
-            st.exception(e)
+            st.exception(error)
 
 
-# -----------------------------
-# Display analysis
-# -----------------------------
+# -------------------------------------------------
+# DISPLAY RESULTS
+# -------------------------------------------------
 if "analysis" in st.session_state:
 
     analysis = st.session_state["analysis"]
 
-    st.success("AI analysis completed.")
+    st.success(
+        "✅ AI analysis completed."
+    )
 
     st.divider()
 
-    col1, col2 = st.columns(2)
+    left_column, right_column = st.columns(2)
 
+
+    # -------------------------------------------------
     # LEFT COLUMN
-    with col1:
+    # -------------------------------------------------
+    with left_column:
 
-        st.subheader("🧠 AI Analysis")
+        st.subheader(
+            "🧠 AI Analysis"
+        )
 
-        st.write("### Summary")
-        st.write(analysis.summary)
-
-        st.write("### Category")
-        st.info(analysis.category)
-
-        st.write("### Suggested Priority")
-
-        if analysis.priority == "Critical":
-            st.error("🔴 Critical")
-
-        elif analysis.priority == "High":
-            st.warning("🟠 High")
-
-        elif analysis.priority == "Medium":
-            st.info("🟡 Medium")
-
-        else:
-            st.success("🟢 Low")
-
-        st.write("### Confidence")
-
-        st.progress(
-            min(
-                max(
-                    analysis.confidence,
-                    0
-                ),
-                100
-            ) / 100
+        st.markdown(
+            "### Summary"
         )
 
         st.write(
-            f"**{analysis.confidence}% confidence**"
+            analysis.summary
         )
 
-        st.write("### Priority Reason")
+        st.markdown(
+            "### Category"
+        )
+
+        st.info(
+            analysis.category
+        )
+
+        st.markdown(
+            "### Suggested Priority"
+        )
+
+        if analysis.priority == "Critical":
+
+            st.error(
+                "🔴 Critical"
+            )
+
+        elif analysis.priority == "High":
+
+            st.warning(
+                "🟠 High"
+            )
+
+        elif analysis.priority == "Medium":
+
+            st.info(
+                "🟡 Medium"
+            )
+
+        else:
+
+            st.success(
+                "🟢 Low"
+            )
+
+
+        st.markdown(
+            "### Confidence"
+        )
+
+        confidence_value = max(
+            0,
+            min(
+                analysis.confidence,
+                100
+            )
+        )
+
+        st.progress(
+            confidence_value / 100
+        )
+
+        st.write(
+            f"**{confidence_value}% confidence**"
+        )
+
+
+        st.markdown(
+            "### Priority Reason"
+        )
 
         st.write(
             analysis.priority_reason
         )
 
 
+    # -------------------------------------------------
     # RIGHT COLUMN
-    with col2:
+    # -------------------------------------------------
+    with right_column:
 
-        st.subheader("📚 Recommended Action")
+        st.subheader(
+            "📚 Recommended Action"
+        )
 
-        st.write("### Suggested Knowledge Article")
+        st.markdown(
+            "### Suggested Knowledge Article"
+        )
 
         st.info(
             analysis.recommended_knowledge_article
         )
 
-        st.write("### Suggested Response")
+        st.markdown(
+            "### Suggested Response"
+        )
 
-        st.text_area(
-            "AI-generated draft",
+        edited_response = st.text_area(
+            "Review or edit the AI-generated response",
             value=analysis.suggested_response,
-            height=260
+            height=280
         )
 
 
-    # -----------------------------
-    # Human review
-    # -----------------------------
+    # -------------------------------------------------
+    # HUMAN REVIEW
+    # -------------------------------------------------
     st.divider()
 
-    st.subheader("👤 Human Review")
+    st.subheader(
+        "👤 Human Review"
+    )
 
     st.write(
-        "The AI recommendation must be reviewed before any action is taken."
+        """
+        The AI recommendation must be reviewed by a human service desk
+        analyst before any action is taken.
+        """
     )
 
     approve_col, edit_col, reject_col = st.columns(3)
+
 
     with approve_col:
 
@@ -299,9 +404,9 @@ if "analysis" in st.session_state:
             st.session_state["decision"] = "rejected"
 
 
-    # -----------------------------
-    # Decision result
-    # -----------------------------
+    # -------------------------------------------------
+    # HUMAN DECISION RESULT
+    # -------------------------------------------------
     if "decision" in st.session_state:
 
         decision = st.session_state["decision"]
@@ -309,26 +414,40 @@ if "analysis" in st.session_state:
         if decision == "approved":
 
             st.success(
-                "Human analyst approved the AI recommendation."
+                "✅ Human analyst approved the AI recommendation."
             )
+
+            st.write(
+                "**Approved Response:**"
+            )
+
+            st.write(
+                edited_response
+            )
+
 
         elif decision == "edit":
 
             st.warning(
-                "Human analyst requested changes before action."
+                "✏️ Human analyst requested changes before action."
             )
+
 
         elif decision == "rejected":
 
             st.error(
-                "Human analyst rejected the AI recommendation."
+                "❌ Human analyst rejected the AI recommendation."
             )
 
 
-# -----------------------------
-# Footer
-# -----------------------------
+# -------------------------------------------------
+# FOOTER
+# -------------------------------------------------
 st.divider()
+
+st.caption(
+    "AI Service Desk Agent | Human-in-the-loop ITSM automation"
+)
 
 st.caption(
     "Process first. AI second. Human accountability always."
